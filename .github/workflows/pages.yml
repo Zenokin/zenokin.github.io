@@ -36,8 +36,40 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          # Upload entire repository
-          path: '.'
+          name: github-pages-${{ github.run_attempt }}
+          path: '.' # Upload entire repository
+      - name: Verify that artifacts are available
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 #v9.0.0
+        env:
+          PAGES_ARTIFACT: github-pages-${{ github.run_attempt }}
+        with:
+          # Retries failed API calls; 4xx responses such as 403 still fail at once.
+          retries: 3
+          script: |
+            const expected = [process.env.PAGES_ARTIFACT].filter(Boolean);
+            const maxAttempts = 4;
+            let missing = expected;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              if (attempt > 1) {
+                await new Promise((resolve) => setTimeout(resolve, Math.min(2 ** attempt, 30) * 1000));
+              }
+              const response  = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+              });
+              const artifacts = response.data.artifacts;
+              const names = new Set(artifacts.map((a) => a.name));
+              missing = expected.filter((name) => !names.has(name));
+              if (missing.length === 0) {
+                core.info(`Artifacts available: ${expected.join(', ')}`);
+                return;
+              }
+              core.info(`Attempt attempt/{maxAttempts}: not listed yet: ${missing.join(', ')}`);
+            }
+            core.setFailed(`Artifacts not available after ${maxAttempts} attempts: ${missing.join(', ')}`);
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
